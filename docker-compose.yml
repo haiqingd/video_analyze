@@ -1,0 +1,27 @@
+services:
+  video2guide:
+    build: .
+    container_name: video2guide
+    restart: unless-stopped
+    ports:
+      - "8300:8300"
+    env_file:
+      - .env
+    environment:
+      - HOST=0.0.0.0
+    volumes:
+      # 生成产物（攻略/缓存/评论）——备份这个目录即可
+      - ./output:/app/output
+      # ASR 模型文件（首次用脚本下载，见 DEPLOY.md）
+      - ./models:/app/models
+      # 提示词挂载出来，改提示词不用重建镜像
+      - ./prompts:/app/prompts
+    # 有 NVIDIA 显卡且装了容器工具包时取消下面注释（ASR 提速明显）；
+    # 没有显卡会自动回退 CPU 识别，功能不受影响。
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]

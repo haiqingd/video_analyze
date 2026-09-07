@@ -1,0 +1,18 @@
+# 密钥与环境
+.env
+
+# 运行产物
+output/
+
+# ASR 模型文件（体积大，自行下载）
+models/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 系统
+.DS_Store
+Thumbs.db

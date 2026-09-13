@@ -146,6 +146,15 @@ class JobManager:
         self._pool = ThreadPoolExecutor(max_workers=2)
         self._dl_pool = ThreadPoolExecutor(max_workers=1)  # 视频下载独立排队，避免占用主流程
         self._load_persisted()
+        self._clean_video_cache()
+
+    def _clean_video_cache(self) -> None:
+        """启动时清空视频缓存：视频流已改为用完即删，这里清掉中断任务残留的半成品。"""
+        try:
+            for p in (OUTPUT_DIR / "cache" / "videos").glob("*.mp4"):
+                p.unlink(missing_ok=True)
+        except OSError:
+            pass
 
     def _load_persisted(self) -> None:
         """启动时回载历史任务（output/*/job.json），重启后页面历史不丢。"""
@@ -218,10 +227,25 @@ class JobManager:
             job.log(f"⚠ {e}")
             if job.result is None:
                 job.status, job.error = "error", str(e)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001 — 未预期的错误
             job.status, job.error = "error", f"未预期的错误：{e.__class__.__name__}: {e}"
         finally:
+            self._cleanup_tmp(job)
             self._persist(job)
+
+    @staticmethod
+    def _cleanup_tmp(job: Job) -> None:
+        """临时媒体清理：截图用的视频流与 ASR 用的音频用完即删，不留磁盘。"""
+        v = getattr(job, "video_tmp_path", None)
+        if v:
+            try:
+                Path(v).unlink(missing_ok=True)
+            except OSError:
+                pass
+        try:
+            (job.dir / "audio.m4a").unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def run_pipeline(job: Job) -> dict[str, Any]:
@@ -316,20 +340,22 @@ def run_pipeline(job: Job) -> dict[str, Any]:
     job.log(f"字幕共 {len(cues)} 条 / {total_chars} 字")
 
     # ---- 3. 截图准备：视频下载与 AI 总结并行 ---------------------------
-    # 视频文件走全局缓存（跨任务复用，减少重复下载与风控概率）
+    # 视频流仅供截帧，任务结束即删（不留磁盘）；下载仍走独立串行队列防风控
     want_shots = max(0, job.shot_count)
     dl_future = None
     VIDEO_CACHE = OUTPUT_DIR / "cache" / "videos"
     VIDEO_CACHE.mkdir(parents=True, exist_ok=True)
     video_path = VIDEO_CACHE / f"{bvid}_p{page}.mp4"
-    if want_shots > 0 and not video_path.exists():
-        def _download() -> Path:
-            job.log("后台下载视频流（用于截图）…")
-            p = frames.download_video(job.url, video_path)
-            job.log(f"视频下载完成（{p.stat().st_size // 1024 // 1024} MB）")
-            return p
+    if want_shots > 0:
+        job.video_tmp_path = video_path  # JobManager 在任务结束（含失败）时统一清理
+        if not video_path.exists():
+            def _download() -> Path:
+                job.log("后台下载视频流（用于截图）…")
+                p = frames.download_video(job.url, video_path)
+                job.log(f"视频下载完成（{p.stat().st_size // 1024 // 1024} MB）")
+                return p
 
-        dl_future = job_manager._dl_pool.submit(_download)
+            dl_future = job_manager._dl_pool.submit(_download)
 
     # ---- 4. AI 总结 ----------------------------------------------------
     job.step = "llm"
@@ -369,7 +395,7 @@ def run_pipeline(job: Job) -> dict[str, Any]:
                 imgs = frames.grab_frames(video_path, [m["t"] for m in moments], img_dir)
                 for m, img in zip(moments, imgs):
                     shots.append({**m, "image": f"images/{img.name}"})
-                # 视频留在缓存目录供复用，不再删除
+                # 视频文件由 JobManager 在任务结束时删除（用完即弃，不占磁盘）
             else:
                 job.log("⚠ 未下载到视频，跳过截图")
         except Exception as e:  # noqa: BLE001 — 截图是增强项，失败降级为无图文档

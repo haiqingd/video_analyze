@@ -11,6 +11,7 @@
 """
 import shutil
 import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -36,9 +37,21 @@ def download(name: str) -> None:
             continue
         url = BASE.format(repo, f)
         print(f"  下载 {f} …")
-        urllib.request.urlretrieve(url, target)
+        try:
+            urllib.request.urlretrieve(url, target)
+        except urllib.error.HTTPError as e:
+            # turbo 镜像缺 vocabulary.txt 时直接 404，跳过、稍后从 medium 词表复制
+            if f == "vocabulary.txt" and e.code == 404:
+                print(f"  {f} 镜像缺失（404），稍后从 medium 词表复制")
+                continue
+            # medium 镜像缺 preprocessor_config.json；faster-whisper 会回退默认特征参数，不影响使用
+            if f == "preprocessor_config.json" and e.code == 404:
+                print(f"  {f} 镜像缺失（404），跳过（faster-whisper 用默认参数）")
+                continue
+            raise SystemExit(f"下载失败：{f}（HTTP {e.code}）")
         # ModelScope 缺文件时返回 JSON 错误而不是 404，识别并处理
-        if target.read_bytes()[:1] == b"{":
+        # （注意 *.json 本身就以 { 开头，只对非 JSON 文件做此检查）
+        if not f.endswith(".json") and target.read_bytes()[:1] == b"{":
             if f == "vocabulary.txt":
                 target.unlink(missing_ok=True)
                 print(f"  {f} 镜像缺失，稍后从 medium 词表复制")

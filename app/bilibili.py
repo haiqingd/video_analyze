@@ -44,6 +44,8 @@ class VideoMeta:
     duration: int  # 秒
     cover_url: str
     pubdate: int = 0  # 发布时间戳（秒），用于系列排序
+    season_id: int = 0  # 所属合集（ugc_season）ID，0 = 不属于任何合集
+    season_title: str = ""  # 合集标题（如"115攻略"）
     pages: list[dict[str, Any]] = None  # type: ignore[assignment]
 
 
@@ -130,7 +132,8 @@ def parse_url(url: str) -> tuple[str, int]:
     return bvid, page
 
 
-def get_video_meta(bvid: str, page: int = 1, sessdata: str = "") -> VideoMeta:
+def _fetch_view(bvid: str, sessdata: str = "") -> dict[str, Any]:
+    """请求 view 接口并返回 data（校验 code）。"""
     client = _make_client(sessdata)
     try:
         r = client.get(f"{API}/x/web-interface/view", params={"bvid": bvid})
@@ -139,7 +142,11 @@ def get_video_meta(bvid: str, page: int = 1, sessdata: str = "") -> VideoMeta:
         client.close()
     if data.get("code") != 0:
         raise BilibiliError(f"获取视频信息失败：{data.get('message', '未知错误')}")
-    v = data["data"]
+    return data["data"]
+
+
+def get_video_meta(bvid: str, page: int = 1, sessdata: str = "") -> VideoMeta:
+    v = _fetch_view(bvid, sessdata)
     pages = v.get("pages", [])
     if pages:
         page = min(page, len(pages))
@@ -148,6 +155,7 @@ def get_video_meta(bvid: str, page: int = 1, sessdata: str = "") -> VideoMeta:
         duration = pages[page - 1].get("duration") or v["duration"]
     else:
         cid, title, duration = v["cid"], v["title"], v["duration"]
+    season = v.get("ugc_season") or {}
     return VideoMeta(
         bvid=bvid,
         cid=cid,
@@ -157,8 +165,45 @@ def get_video_meta(bvid: str, page: int = 1, sessdata: str = "") -> VideoMeta:
         duration=int(duration),
         cover_url=v.get("pic", ""),
         pubdate=int(v.get("pubdate") or 0),
+        season_id=int(season.get("id") or 0),
+        season_title=str(season.get("title") or ""),
         pages=[{"page": p["page"], "part": p["part"], "duration": p["duration"]} for p in pages],
     )
+
+
+def get_season(bvid: str, sessdata: str = "") -> dict[str, Any] | None:
+    """查询 BV 所属的 UGC 合集；不属于任何合集时返回 None。
+
+    返回 {"id": int, "title": str, "uploader": str,
+          "episodes": [{"bvid","title","duration","pubdate","cover"}, ...]}（按合集内顺序）。
+    """
+    v = _fetch_view(bvid, sessdata)
+    season = v.get("ugc_season") or {}
+    if not season.get("id"):
+        return None
+    episodes: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for sec in season.get("sections", []):
+        for ep in sec.get("episodes", []):
+            bv = ep.get("bvid")
+            if not bv or bv in seen:
+                continue
+            seen.add(bv)
+            episodes.append(
+                {
+                    "bvid": bv,
+                    "title": str(ep.get("title") or ""),
+                    "duration": int(ep.get("duration") or 0),
+                    "pubdate": int(ep.get("pubdate") or 0),
+                    "cover": str(ep.get("cover") or ""),
+                }
+            )
+    return {
+        "id": int(season["id"]),
+        "title": str(season.get("title") or ""),
+        "uploader": v["owner"]["name"],
+        "episodes": episodes,
+    }
 
 
 @dataclass

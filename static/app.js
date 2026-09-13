@@ -4,21 +4,26 @@
 const $ = (id) => document.getElementById(id);
 const el = {
   inputCard: $("input-card"), progressCard: $("progress-card"), errorCard: $("error-card"),
-  resultCard: $("result-card"), historyBlock: $("history-block"),
+  resultCard: $("result-card"),
+  sidebar: $("sidebar"), sbCollections: $("sb-collections"), sbEpisodes: $("sb-episodes"),
+  sbCollList: $("sb-coll-list"), sbEpList: $("sb-ep-list"), sbSearch: $("sb-search"),
+  btnSbBack: $("btn-sb-back"), sbCollTitle: $("sb-coll-title"), sbCollMeta: $("sb-coll-meta"),
+  btnSidebar: $("btn-sidebar"),
+  segColSort: $("seg-col-sort"), btnParseNew: $("btn-parse-new"),
+  epNav: $("ep-nav"), btnPrevEp: $("btn-prev-ep"), btnNextEp: $("btn-next-ep"), epPos: $("ep-pos"),
   url: $("url"), btnGo: $("btn-go"), btnSettings: $("btn-settings"),
   segStyle: $("seg-style"), segShots: $("seg-shots"),
   stepper: $("stepper"), logs: $("logs"), progressText: $("progress-text"), elapsed: $("elapsed"),
   errorMsg: $("error-msg"), btnRetry: $("btn-retry"), btnErrorSettings: $("btn-error-settings"),
   resultCover: $("result-cover"), resultTitle: $("result-title"),
   chipUploader: $("chip-uploader"), chipDuration: $("chip-duration"),
-  chipSubtitle: $("chip-subtitle"), chipModel: $("chip-model"), linkOrigin: $("link-origin"),
+  chipSubtitle: $("chip-subtitle"), chipModel: $("chip-model"), chipSeason: $("chip-season"),
+  linkOrigin: $("link-origin"),
   guide: $("guide"), shotsBlock: $("shots-block"), shots: $("shots"), warnStrip: $("warn-strip"),
   btnCopy: $("btn-copy"), btnDownload: $("btn-download"), btnNew: $("btn-new"),
-  historyList: $("history-list"),
   modalMask: $("modal-mask"), btnModalClose: $("btn-modal-close"), btnSaveSettings: $("btn-save-settings"),
   setKey: $("set-key"), setModel: $("set-model"), setSessdata: $("set-sessdata"), hintKey: $("hint-key"),
   toast: $("toast"), exampleLink: $("example-link"),
-  historySearch: $("history-search"), historyCount: $("history-count"), segSort: $("seg-sort"),
   referenceUrl: $("reference-url"),
   commentList: $("comment-list"), commentCount: $("comment-count"),
   commentName: $("comment-name"), commentText: $("comment-text"), btnComment: $("btn-comment"),
@@ -29,11 +34,15 @@ const el = {
   btnImport: $("btn-import"), importFile: $("import-file"), btnExport: $("btn-export"),
   accessMask: $("access-mask"), accessInput: $("access-key-input"),
   btnAccessOk: $("btn-access-ok"), btnAccessClose: $("btn-access-close"),
+  seasonMask: $("season-mask"), seasonTitle: $("season-title"), seasonSub: $("season-sub"),
+  seasonList: $("season-list"), seasonAll: $("season-all"), seasonSelected: $("season-selected"),
+  btnSeasonClose: $("btn-season-close"), btnSeasonGo: $("btn-season-go"),
+  btnSeasonCurrent: $("btn-season-current"),
 };
 
 const LS_KEY = "v2g_settings";
 const settings = Object.assign(
-  { api_key: "", model: "", sessdata: "", style: "standard", shots: 6, history_sort: "pubdate", access_key: "", reference_url: "" },
+  { api_key: "", model: "", sessdata: "", style: "standard", shots: 6, collection_sort: "order", access_key: "", reference_url: "" },
   JSON.parse(localStorage.getItem(LS_KEY) || "{}")
 );
 const saveSettings = () => localStorage.setItem(LS_KEY, JSON.stringify(settings));
@@ -119,7 +128,28 @@ el.exampleLink.addEventListener("click", (e) => {
 });
 
 /* ---------- 提交 ---------- */
-let pendingSubmission = null;  // 等待密钥的提交请求
+let pendingResume = null;   // 等待访问密钥后要继续的流程
+let pollBatchTimer = null;
+
+const buildPayload = (url) => ({
+  url: (url || el.url.value).trim(),
+  style: settings.style,
+  shot_count: settings.shots,
+  sessdata: settings.sessdata || "",
+  api_key: settings.api_key || "",
+  model: settings.model || "",
+  reference_url: el.referenceUrl.value.trim(),
+  access_key: settings.access_key || "",
+});
+
+function needKey() {
+  if (!settings.api_key && !serverConfig.has_server_key) {
+    openSettings();
+    toast("请先填写 GLM API Key");
+    return true;
+  }
+  return false;
+}
 
 async function start() {
   if (!urlValid()) {
@@ -128,82 +158,102 @@ async function start() {
     el.url.focus();
     return;
   }
-  if (!settings.api_key && !serverConfig.has_server_key) {
-    openSettings();
-    toast("请先填写 GLM API Key");
-    return;
-  }
-  const payload = () => ({
-    url: el.url.value.trim(),
-    style: settings.style,
-    shot_count: settings.shots,
-    sessdata: settings.sessdata || "",
-    api_key: settings.api_key || "",
-    model: settings.model || "",
-    reference_url: el.referenceUrl.value.trim(),
-    access_key: settings.access_key || "",
-  });
+  if (needKey()) return;
+  const url = el.url.value.trim();
+  // 合集检测：视频属于 B 站合集时，先让用户选择要解析哪些视频
   try {
-    const r = await fetch("/api/extract", {
+    const r = await fetch("/api/season", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload()),
+      body: JSON.stringify({ url, access_key: settings.access_key || "" }),
     });
     if (r.status === 403) {
-      // 需要访问密钥
-      pendingSubmission = payload();
+      pendingResume = start;
       el.accessMask.classList.remove("hidden");
       el.accessInput.focus();
       return;
     }
-    if (!r.ok) {
-      const err = await r.json().catch(() => ({}));
-      throw new Error(err.detail || `请求失败 (${r.status})`);
+    if (r.ok) {
+      const info = await r.json();
+      if (info.season_id && info.episodes && info.episodes.length) {
+        showSeasonPicker(info, { preselect: [info.bvid], source: "parse", currentUrl: url });
+        return;
+      }
     }
-    const { job_id } = await r.json();
-    renderRunning();
-    poll(job_id);
-  } catch (e) {
-    showError(String(e.message || e), false);
-  }
+  } catch { /* 合集查询失败不阻塞正常解析 */ }
+  submitBatch([url]);
 }
 
 function closeAccessMask() {
   el.accessMask.classList.add("hidden");
-  pendingSubmission = null;
+  pendingResume = null;
 }
 
 async function submitWithAccessKey() {
   const key = el.accessInput.value.trim();
   if (!key) { toast("请输入访问密钥"); return; }
-  if (!pendingSubmission) { closeAccessMask(); return; }
-  pendingSubmission.access_key = key;
-  try {
-    const r = await fetch("/api/extract", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(pendingSubmission),
-    });
-    if (r.status === 403) {
-      toast("密钥不正确，请联系 462574808@qq.com");
-      el.accessInput.select();
-      return;
+  settings.access_key = key;
+  saveSettings();
+  const resume = pendingResume;
+  closeAccessMask();
+  el.accessInput.value = "";
+  if (resume) await resume();
+}
+
+async function submitBatch(urls) {
+  const jobIds = [];
+  let firstErr = "";
+  for (const u of urls) {
+    try {
+      const r = await fetch("/api/extract", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildPayload(u)),
+      });
+      if (r.status === 403) {
+        pendingResume = () => submitBatch(urls);
+        el.accessMask.classList.remove("hidden");
+        el.accessInput.focus();
+        return;
+      }
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        throw new Error(err.detail || `请求失败 (${r.status})`);
+      }
+      jobIds.push((await r.json()).job_id);
+    } catch (e) {
+      firstErr = String(e.message || e);
     }
-    if (!r.ok) {
-      const err = await r.json().catch(() => ({}));
-      throw new Error(err.detail || `请求失败 (${r.status})`);
-    }
-    settings.access_key = key;
-    saveSettings();
-    closeAccessMask();
-    el.accessInput.value = "";
-    const { job_id } = await Promise.resolve(r.json());
-    renderRunning();
-    poll(job_id);
-  } catch (e) {
-    closeAccessMask();
-    showError(String(e.message || e), false);
   }
+  if (!jobIds.length) {
+    showError(firstErr || "提交失败", false);
+    return;
+  }
+  if (jobIds.length > 1) {
+    toast(`已提交 ${jobIds.length} 个解析任务，其余任务在后台排队处理`);
+    watchBatch(jobIds.slice());
+  }
+  renderRunning();
+  poll(jobIds[0]);
+}
+
+function watchBatch(ids) {
+  // 批量任务：后台轮询剩余任务，全部结束后刷新历史/合集列表
+  clearInterval(pollBatchTimer);
+  pollBatchTimer = setInterval(async () => {
+    let running = 0;
+    for (const id of ids) {
+      try {
+        const j = await (await fetch(`/api/jobs/${id}`)).json();
+        if (j.status === "running" || j.status === "queued") running++;
+      } catch { running++; }
+    }
+    if (!running) {
+      clearInterval(pollBatchTimer);
+      loadHistory();
+      toast("合集批量解析完成");
+    }
+  }, 15000);
 }
 
 /* ---------- 进行中 ---------- */
@@ -282,6 +332,16 @@ function renderResult(res, jobId) {
   el.chipDuration.textContent = fmtDuration(v.duration);
   el.chipSubtitle.textContent = res.subtitle_desc;
   el.chipModel.textContent = res.model;
+  if (v.season_id && v.season_title) {
+    el.chipSeason.dataset.sid = String(v.season_id);
+    el.chipSeason.textContent = `合集 · ${v.season_title} ›`;
+    el.chipSeason.classList.remove("hidden");
+  } else {
+    el.chipSeason.dataset.sid = "";
+    el.chipSeason.classList.add("hidden");
+  }
+  syncSidebarToSeason(v.season_id);   // 打开攻略自动在左侧栏选中其所属合集
+  renderEpisodeNav(v);
   el.linkOrigin.href = v.url;
   if (v.cover) { el.resultCover.src = v.cover; el.resultCover.classList.remove("hidden"); }
   else el.resultCover.classList.add("hidden");
@@ -329,14 +389,16 @@ function renderResult(res, jobId) {
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
-/* ---------- 路由 ---------- */
+/* ---------- 路由：#/ 首页+合集列表 | #/c/{seasonId} 合集内视频列表 | #/g/{jobId} 攻略 ---------- */
 let suppressHashChange = false;
+let currentSeasonId = null;   // 左侧栏选中的合集（null = 显示合集列表；"0" = 单集汇总）
 
 function goHome() {
   currentJobId = null;
   currentResult = null;
+  currentSeasonId = null;
   show(el.inputCard);
-  renderHistory();
+  renderSidebar();
   if (location.hash && location.hash !== "#/") {
     suppressHashChange = true;
     location.hash = "#/";
@@ -346,19 +408,187 @@ function goHome() {
 
 window.addEventListener("hashchange", () => {
   if (suppressHashChange) { suppressHashChange = false; return; }
-  const m = location.hash.match(/^#\/g\/(.+)$/);
-  if (m && m[1] !== currentJobId) {
-    reopen(m[1]);
+  const g = location.hash.match(/^#\/g\/(.+)$/);
+  const c = location.hash.match(/^#\/c\/(\d+)$/);
+  if (g && g[1] !== currentJobId) {
+    reopen(g[1]);
+  } else if (c && (c[1] !== String(currentSeasonId) || currentJobId)) {
+    openCollectionList(c[1]);
   } else if (!location.hash || location.hash === "#/") {
-    if (currentJobId) goHomeInternal();
+    if (currentJobId || currentSeasonId !== null) goHomeInternal();
   }
 });
 
 function goHomeInternal() {
   currentJobId = null;
   currentResult = null;
+  currentSeasonId = null;
   show(el.inputCard);
-  renderHistory();
+  renderSidebar();
+}
+
+/* ---------- 左侧栏：合集列表 ⇄ 合集内视频 ---------- */
+function collectionJobs(id) {
+  // 某合集（id=0 表示无合集单集）下的全部视频，同一 BV 只保留一份（优先成功任务）
+  const byBv = new Map();
+  for (const j of historyJobs) {
+    if (String(j.season_id || 0) !== String(id)) continue;
+    const bv = j.bvid || (j.url || "").match(/BV[0-9A-Za-z]{10}/)?.[0] || j.id;
+    const prev = byBv.get(bv);
+    if (!prev || (j.status === "done" && prev.status !== "done")) byBv.set(bv, j);
+  }
+  return [...byBv.values()];
+}
+
+function closeMobileSidebar() {
+  el.sidebar.classList.remove("open");
+}
+
+function openCollectionList(id) {
+  // 选中合集（#/c/）：左侧栏切到该合集的视频列表，主区域回首页
+  currentJobId = null;
+  currentResult = null;
+  currentSeasonId = id;
+  show(el.inputCard);
+  renderSidebar();
+  window.scrollTo({ top: 0, behavior: "instant" });
+}
+
+function syncSidebarToSeason(seasonId) {
+  // 打开攻略时自动选中其所属合集（不切换主区域视图）
+  currentSeasonId = seasonId ? String(seasonId) : null;
+  renderSidebar();
+}
+
+function renderSidebar() {
+  if (currentSeasonId === null) {
+    el.sbCollections.classList.remove("hidden");
+    el.sbEpisodes.classList.add("hidden");
+    renderSidebarCollections();
+  } else {
+    el.sbCollections.classList.add("hidden");
+    el.sbEpisodes.classList.remove("hidden");
+    renderSidebarEpisodes();
+  }
+}
+
+function renderSidebarCollections() {
+  const search = (el.sbSearch.value || "").trim().toLowerCase();
+  const items = dedupByBv(historyJobs);
+  // 搜索：跨合集匹配视频标题，平铺展示
+  if (search) {
+    const hit = items
+      .filter((j) => (j.title || "").toLowerCase().includes(search))
+      .sort((a, b) => (b.pubdate || 0) - (a.pubdate || 0));
+    el.sbCollList.innerHTML = hit
+      .map((j) => itemRowHtml(j, j.pubdate ? fmtPubdate(j.pubdate) : j.created_at.slice(5, 16)))
+      .join("");
+    el.sbCollList.querySelectorAll(".history-item").forEach((row) => {
+      row.addEventListener("click", () => { closeMobileSidebar(); reopen(row.dataset.id); });
+    });
+    return;
+  }
+  // 默认：合集卡片（按最近更新倒序，单集最后）
+  const byKey = new Map();
+  for (const j of items) {
+    const key = j.season_id ? String(j.season_id) : "0";
+    if (!byKey.has(key)) byKey.set(key, { id: key, title: j.season_title || "单集视频", jobs: [] });
+    byKey.get(key).jobs.push(j);
+  }
+  const cards = [...byKey.values()].map((c) => {
+    c.ts = Math.max(...c.jobs.map((j) => j.pubdate || 0));
+    c.uploader = (c.jobs.find((j) => j.uploader) || {}).uploader || "";
+    return c;
+  });
+  const singles = cards.filter((c) => c.id === "0").sort((a, b) => b.ts - a.ts);
+  const named = cards.filter((c) => c.id !== "0").sort((a, b) => b.ts - a.ts);
+  el.sbCollList.innerHTML = [...named, ...singles]
+    .map((c) => {
+      const cover = (c.jobs.find((j) => j.cover) || {}).cover || "";
+      const img = cover ? `<img src="${cover}" loading="lazy" alt="">` : "";
+      return `<div class="sb-coll-item" data-id="${c.id}" title="${escapeHtml(c.title)}">
+        <div class="sb-coll-cover">${img}</div>
+        <div class="sb-coll-main">
+          <span class="sb-coll-name">${escapeHtml(c.title)}</span>
+          <span class="sb-coll-sub">${c.jobs.length} 个视频${c.uploader ? " · " + escapeHtml(c.uploader) : ""}</span>
+        </div>
+        <span class="sb-coll-count">${c.ts ? fmtPubdate(c.ts).slice(2) : ""}</span>
+      </div>`;
+    })
+    .join("");
+  el.sbCollList.querySelectorAll(".sb-coll-item").forEach((card) => {
+    card.addEventListener("click", () => {
+      closeMobileSidebar();
+      location.hash = `#/c/${card.dataset.id}`;
+    });
+  });
+}
+
+function renderSidebarEpisodes() {
+  const id = currentSeasonId;
+  const jobs = collectionJobs(id);
+  const named = jobs.find((j) => j.season_title);
+  el.sbCollTitle.textContent = id === "0" ? "单集视频" : (named ? named.season_title : "合集");
+  const uploader = (jobs.find((j) => j.uploader) || {}).uploader || "";
+  el.sbCollMeta.textContent = `${jobs.length} 个视频${uploader ? " · " + uploader : ""}`;
+  el.btnParseNew.classList.toggle("hidden", id === "0" || !jobs.some((j) => j.bvid));
+  renderCollectionList(jobs);
+}
+
+function renderCollectionList(jobs) {
+  const sortBy = settings.collection_sort || "order";
+  const items = [...jobs];
+  if (sortBy === "order") items.sort((a, b) => (a.pubdate || Infinity) - (b.pubdate || Infinity));
+  else if (sortBy === "pubdesc") items.sort((a, b) => (b.pubdate || 0) - (a.pubdate || 0));
+  else items.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+  el.sbEpList.innerHTML = items
+    .map((j) => {
+      const date = sortBy === "created" || !j.pubdate
+        ? j.created_at.slice(5, 16)
+        : fmtPubdate(j.pubdate);
+      const thumb = j.cover
+        ? `<img class="history-thumb" src="${j.cover}" loading="lazy" alt="">`
+        : `<div class="history-thumb"></div>`;
+      return `<div class="history-item collection-row${j.id === currentJobId ? " active" : ""}" data-id="${j.id}" title="${escapeHtml(j.title || "")}">
+        ${thumb}
+        <div class="h-main">
+          <span class="h-title">${escapeHtml(j.title || j.id)}</span>
+          <span class="h-meta"><span class="h-dot ${j.status}"></span><span class="h-time">${date}</span></span>
+        </div>
+      </div>`;
+    })
+    .join("");
+  el.sbEpList.querySelectorAll(".history-item").forEach((item) => {
+    item.addEventListener("click", () => { closeMobileSidebar(); reopen(item.dataset.id); });
+  });
+  // 当前正在看的集数滚进侧栏可视区
+  const activeRow = el.sbEpList.querySelector(".history-item.active");
+  if (activeRow) activeRow.scrollIntoView({ block: "nearest" });
+}
+
+/* ---------- 攻略页：合集内上一集 / 下一集 ---------- */
+function renderEpisodeNav(v) {
+  if (!v || !v.season_id || !v.bvid || !historyJobs.length) {
+    el.epNav.classList.add("hidden");
+    return;
+  }
+  const jobs = collectionJobs(String(v.season_id))
+    .sort((a, b) => (a.pubdate || Infinity) - (b.pubdate || Infinity));
+  const idx = jobs.findIndex((j) => j.bvid === v.bvid);
+  if (idx < 0 || jobs.length < 2) {
+    el.epNav.classList.add("hidden");
+    return;
+  }
+  const prev = idx > 0 ? jobs[idx - 1] : null;
+  const next = idx < jobs.length - 1 ? jobs[idx + 1] : null;
+  el.btnPrevEp.disabled = !prev;
+  el.btnNextEp.disabled = !next;
+  el.btnPrevEp.title = prev ? `上一集：${prev.title.slice(0, 30)}` : "已经是第一集";
+  el.btnNextEp.title = next ? `下一集：${next.title.slice(0, 30)}` : "已经是最后一集";
+  el.epPos.textContent = `第 ${idx + 1} / ${jobs.length} 集`;
+  el.btnPrevEp.onclick = () => prev && reopen(prev.id);
+  el.btnNextEp.onclick = () => next && reopen(next.id);
+  el.epNav.classList.remove("hidden");
 }
 
 /* ---------- 评论 ---------- */
@@ -481,9 +711,8 @@ function showError(msg, needSettings) {
   show(el.errorCard);
 }
 
-/* ---------- 历史 ---------- */
+/* ---------- 任务列表数据（左侧栏与合集导航的数据源） ---------- */
 let historyJobs = [];   // 原始列表
-let historyRendered = false;
 
 function fmtPubdate(ts) {
   if (!ts) return "";
@@ -491,9 +720,28 @@ function fmtPubdate(ts) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-function seasonOf(title) {
-  const m = title.match(/^([春夏秋冬])/);
-  return m ? m[1] : "";
+function dedupByBv(jobs) {
+  // 同一视频只保留一份（优先成功任务；同状态保留更新近创建的）
+  const byBv = new Map();
+  for (const j of jobs) {
+    const bv = j.bvid || (j.url || "").match(/BV[0-9A-Za-z]{10}/)?.[0] || j.id;
+    const prev = byBv.get(bv);
+    if (!prev || (j.status === "done" && prev.status !== "done")) byBv.set(bv, j);
+  }
+  return [...byBv.values()];
+}
+
+function itemRowHtml(j, date) {
+  const thumb = j.cover
+    ? `<img class="history-thumb" src="${j.cover}" loading="lazy" alt="">`
+    : `<div class="history-thumb"></div>`;
+  return `<div class="history-item${j.id === currentJobId ? " active" : ""}" data-id="${j.id}" title="${escapeHtml(j.title || "")}">
+    ${thumb}
+    <div class="h-main">
+      <span class="h-title">${escapeHtml(j.title || j.id)}</span>
+      <span class="h-meta"><span class="h-dot ${j.status}"></span><span class="h-time">${date}</span></span>
+    </div>
+  </div>`;
 }
 
 async function loadHistory() {
@@ -501,69 +749,9 @@ async function loadHistory() {
     const r = await fetch("/api/jobs");
     historyJobs = (await r.json()).jobs || [];
   } catch { historyJobs = []; }
-  renderHistory();
-}
-
-function renderHistory() {
-  const list = el.historyList;
-  const search = el.historySearch.value.trim().toLowerCase();
-  const sortBy = settings.history_sort || "pubdate";
-
-  // 去重：同一视频只保留最新一份（优先成功任务）
-  const byBv = new Map();
-  for (const j of historyJobs) {
-    const bv = j.bvid || (j.url || "").match(/BV[0-9A-Za-z]{10}/)?.[0] || j.id;
-    const prev = byBv.get(bv);
-    if (!prev || (j.status === "done" && prev.status !== "done")) byBv.set(bv, j);
-  }
-  let items = [...byBv.values()];
-
-  if (search) items = items.filter((j) => (j.title || "").toLowerCase().includes(search));
-
-  if (sortBy === "pubdate" && items.some((j) => j.pubdate)) {
-    items.sort((a, b) => (a.pubdate || 0) - (b.pubdate || 0));
-  } else {
-    items.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
-  }
-
-  el.historyCount.textContent = search
-    ? `${items.length} / ${byBv.size} 个视频`
-    : `共 ${byBv.size} 个视频`;
-
-  if (!items.length) {
-    el.historyBlock.classList.add("hidden");
-    return;
-  }
-  el.historyBlock.classList.remove("hidden");
-
-  const useGroups = sortBy === "pubdate";
-  let html = "";
-  let lastSeason = null;
-  for (const j of items) {
-    if (useGroups) {
-      const s = seasonOf(j.title || "");
-      const group = s ? `${s} 季` : "其他";
-      if (group !== lastSeason) {
-        html += `<div class="history-group">${group}</div>`;
-        lastSeason = group;
-      }
-    }
-    const date = useGroups && j.pubdate ? fmtPubdate(j.pubdate) : j.created_at.slice(5, 16);
-    const thumb = j.cover
-      ? `<img class="history-thumb" src="${j.cover}" loading="lazy" alt="">`
-      : `<div class="history-thumb"></div>`;
-    html += `<div class="history-item${j.id === currentJobId ? " active" : ""}" data-id="${j.id}" title="${escapeHtml(j.title || "")}">
-      ${thumb}
-      <div class="h-main">
-        <span class="h-title">${escapeHtml(j.title || j.id)}</span>
-        <span class="h-meta"><span class="h-dot ${j.status}"></span><span class="h-time">${date}</span></span>
-      </div>
-    </div>`;
-  }
-  list.innerHTML = html;
-  list.querySelectorAll(".history-item").forEach((item) => {
-    item.addEventListener("click", () => reopen(item.dataset.id));
-  });
+  renderSidebar();
+  // 正在看攻略时同步集数导航（新任务完成、列表变化）
+  if (currentJobId && currentResult) renderEpisodeNav(currentResult.video);
 }
 
 async function reopen(jobId) {
@@ -578,16 +766,152 @@ async function reopen(jobId) {
   poll(jobId);
 }
 
+/* ---------- 合集选集弹窗 ---------- */
+let seasonInfo = null;
+let seasonState = { preselect: [], source: "parse", currentUrl: "" };
+
+async function fetchSeason(body) {
+  // 返回 {status, info}：status = ok | forbidden | fail
+  try {
+    const r = await fetch("/api/season", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...body, access_key: settings.access_key || "" }),
+    });
+    if (r.status === 403) return { status: "forbidden" };
+    if (!r.ok) return { status: "fail" };
+    return { status: "ok", info: await r.json() };
+  } catch {
+    return { status: "fail" };
+  }
+}
+
+function showSeasonPicker(info, opts) {
+  seasonInfo = info;
+  seasonState = opts;
+  const parsed = info.episodes.filter((e) => e.parsed).length;
+  el.seasonTitle.textContent = `选择合集视频 · ${info.season_title}`;
+  el.seasonSub.textContent = `UP主 ${info.uploader} · 共 ${info.episodes.length} 集 · 已解析 ${parsed} 集`;
+  el.btnSeasonCurrent.classList.toggle("hidden", opts.source !== "parse");
+  renderSeasonList();
+  el.seasonMask.classList.remove("hidden");
+}
+
+function closeSeasonPicker() {
+  el.seasonMask.classList.add("hidden");
+  seasonInfo = null;
+}
+
+function renderSeasonList() {
+  const eps = [...(seasonInfo ? seasonInfo.episodes : [])].sort((a, b) => (a.pubdate || 0) - (b.pubdate || 0));
+  el.seasonList.innerHTML = eps
+    .map((e) => {
+      const date = e.pubdate ? fmtPubdate(e.pubdate) : "";
+      if (e.parsed) {
+        return `<div class="season-row parsed" data-job="${e.job_id}" title="已生成攻略，点击查看">
+          <span class="season-done-badge">✓</span>
+          <span class="season-title">${escapeHtml(e.title)}</span>
+          <span class="season-badge">已生成</span>
+          <span class="season-date">${date}</span>
+        </div>`;
+      }
+      const checked = seasonState.preselect.includes(e.bvid) ? " checked" : "";
+      return `<label class="season-row">
+        <input type="checkbox" class="season-check" data-bv="${e.bvid}"${checked}>
+        <span class="season-title">${escapeHtml(e.title)}</span>
+        <span class="season-date">${date}</span>
+      </label>`;
+    })
+    .join("");
+  el.seasonList.querySelectorAll("input.season-check").forEach((cb) => {
+    cb.addEventListener("change", updateSeasonCount);
+  });
+  el.seasonList.querySelectorAll(".season-row.parsed").forEach((row) => {
+    row.addEventListener("click", () => {
+      const id = row.dataset.job;
+      closeSeasonPicker();
+      if (id) reopen(id);
+    });
+  });
+  updateSeasonCount();
+}
+
+function updateSeasonCount() {
+  const boxes = [...el.seasonList.querySelectorAll("input.season-check")];
+  const n = boxes.filter((cb) => cb.checked).length;
+  el.seasonSelected.textContent = `已选 ${n} 个视频`;
+  el.seasonAll.checked = n > 0 && n === boxes.length;
+  el.btnSeasonGo.disabled = n === 0;
+}
+
+function submitSeasonSelection() {
+  const bvs = [...el.seasonList.querySelectorAll("input.season-check:checked")].map((cb) => cb.dataset.bv);
+  closeSeasonPicker();
+  submitBatch(bvs.map((bv) => `https://www.bilibili.com/video/${bv}`));
+}
+
+async function parseCollectionNew() {
+  if (needKey()) return;
+  const jobs = collectionJobs(currentSeasonId);
+  const bv = (jobs.find((j) => j.bvid) || {}).bvid;
+  if (!bv) { toast("没有可用的视频信息"); return; }
+  const { status, info } = await fetchSeason({ bvid: bv });
+  if (status === "forbidden") {
+    pendingResume = parseCollectionNew;
+    el.accessMask.classList.remove("hidden");
+    el.accessInput.focus();
+    return;
+  }
+  if (status !== "ok" || !info.season_id) { toast("合集信息获取失败，请稍后再试"); return; }
+  const unparsed = info.episodes.filter((e) => !e.parsed).map((e) => e.bvid);
+  showSeasonPicker(info, { preselect: unparsed, source: "collection", currentUrl: "" });
+}
+
 /* ---------- 事件绑定 ---------- */
 el.btnGo.addEventListener("click", start);
 el.btnSettings.addEventListener("click", openSettings);
 el.btnModalClose.addEventListener("click", closeSettings);
 el.btnSaveSettings.addEventListener("click", saveSettingsUI);
 el.modalMask.addEventListener("click", (e) => { if (e.target === el.modalMask) closeSettings(); });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSettings(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { closeLightbox(); closeSettings(); closeAccessMask(); closeSeasonPicker(); }
+});
 el.btnRetry.addEventListener("click", () => { show(el.inputCard); el.url.focus(); });
 el.btnErrorSettings.addEventListener("click", openSettings);
 el.btnNew.addEventListener("click", () => { show(el.inputCard); el.url.select(); });
+
+/* 合集选集弹窗 */
+el.seasonMask.addEventListener("click", (e) => { if (e.target === el.seasonMask) closeSeasonPicker(); });
+el.btnSeasonClose.addEventListener("click", closeSeasonPicker);
+el.seasonAll.addEventListener("change", () => {
+  el.seasonList.querySelectorAll("input.season-check").forEach((cb) => { cb.checked = el.seasonAll.checked; });
+  updateSeasonCount();
+});
+el.btnSeasonGo.addEventListener("click", submitSeasonSelection);
+el.btnSeasonCurrent.addEventListener("click", () => {
+  const url = seasonState.currentUrl;
+  closeSeasonPicker();
+  if (url) submitBatch([url]);
+});
+
+/* 合集内容页 */
+el.btnParseNew.addEventListener("click", parseCollectionNew);
+
+/* 左侧栏：返回合集列表 / 移动端开关 / 攻略页合集 chip 定位 */
+el.btnSbBack.addEventListener("click", () => {
+  closeMobileSidebar();
+  location.hash = "#/";
+});
+el.btnSidebar.addEventListener("click", () => el.sidebar.classList.toggle("open"));
+el.chipSeason.addEventListener("click", (e) => {
+  e.preventDefault();
+  const sid = el.chipSeason.dataset.sid;
+  if (!sid) return;
+  syncSidebarToSeason(sid);
+  const row = el.sbEpList.querySelector(".history-item.active");
+  if (row) row.scrollIntoView({ block: "center", behavior: "smooth" });
+  if (window.innerWidth < 900) el.sidebar.classList.add("open");
+});
 el.btnCopy.addEventListener("click", async () => {
   if (!currentResult) return;
   try {
@@ -645,11 +969,22 @@ document.addEventListener("click", (e) => {
 });
 
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") { closeLightbox(); closeSettings(); closeAccessMask(); return; }
+  if (e.key === "Escape") { closeLightbox(); closeSettings(); closeAccessMask(); closeSeasonPicker(); return; }
   if (e.key === "/" && !/INPUT|TEXTAREA/.test(document.activeElement?.tagName || "")) {
     e.preventDefault();
-    el.historySearch.focus();
-    el.historySearch.select();
+    if (currentSeasonId !== null) {
+      // 已在合集内：先回到合集列表态再聚焦搜索
+      currentSeasonId = null;
+      renderSidebar();
+    }
+    el.sbSearch.focus();
+    el.sbSearch.select();
+  }
+  // 攻略页 ←/→ 切换合集内上一集/下一集
+  if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !el.resultCard.classList.contains("hidden")
+      && !/INPUT|TEXTAREA/.test(document.activeElement?.tagName || "")) {
+    const btn = e.key === "ArrowLeft" ? el.btnPrevEp : el.btnNextEp;
+    if (btn && !btn.disabled) btn.click();
   }
 });
 
@@ -699,19 +1034,19 @@ $("btn-theme").addEventListener("click", () => {
 (async function init() {
   loadSettingsUI();
   refreshGoState();
-  syncSeg(el.segSort, settings.history_sort || "pubdate");
-  el.segSort.addEventListener("click", (e) => {
+  syncSeg(el.segColSort, settings.collection_sort || "order");
+  el.segColSort.addEventListener("click", (e) => {
     const btn = e.target.closest("button");
     if (!btn) return;
-    syncSeg(el.segSort, btn.dataset.val);
-    settings.history_sort = btn.dataset.val;
+    syncSeg(el.segColSort, btn.dataset.val);
+    settings.collection_sort = btn.dataset.val;
     saveSettings();
-    renderHistory();
+    renderCollectionList(collectionJobs(currentSeasonId));
   });
   let searchTimer = null;
-  el.historySearch.addEventListener("input", () => {
+  el.sbSearch.addEventListener("input", () => {
     clearTimeout(searchTimer);
-    searchTimer = setTimeout(renderHistory, 150);
+    searchTimer = setTimeout(renderSidebar, 150);
   });
   try {
     serverConfig = await (await fetch("/api/config")).json();
@@ -720,8 +1055,10 @@ $("btn-theme").addEventListener("click", () => {
     }
     if (!settings.model) el.setModel.placeholder = serverConfig.model;
   } catch { /* 忽略 */ }
-  loadHistory();
-  // 初始路由：#/g/{jobId} 直接打开对应文章
-  const m = location.hash.match(/^#\/g\/(.+)$/);
-  if (m) reopen(m[1]);
+  await loadHistory();
+  // 初始路由：#/g/{jobId} 打开文章（侧栏自动选中其合集）；#/c/{seasonId} 选中合集
+  const g = location.hash.match(/^#\/g\/(.+)$/);
+  const c = location.hash.match(/^#\/c\/(\d+)$/);
+  if (g) reopen(g[1]);
+  else if (c) openCollectionList(c[1]);
 })();

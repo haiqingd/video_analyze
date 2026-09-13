@@ -36,7 +36,8 @@ class GLMClient:
         self.model = model
         self.base_url = base_url.rstrip("/")
 
-    def chat(self, system: str, user: str, temperature: float = 0.3, max_tokens: int = 8192) -> str:
+    def chat(self, system: str, user: str, temperature: float = 0.3, max_tokens: int = 8192, game_ctx: str = "") -> str:
+        """game_ctx：视频标题等语境，仅在内容风控误伤时用于附加说明。"""
         payload = {
             "model": self.model,
             "messages": [
@@ -81,9 +82,10 @@ class GLMClient:
                 if r.status_code == 400 and "敏感" in msg and attempt < len(backoffs):
                     if not note_added:
                         note_added = True
+                        ctx = f"《{game_ctx}》" if game_ctx else ""
                         payload["messages"] = [
                             payload["messages"][0],
-                            {"role": "user", "content": "（说明：以下全部是游戏《星露谷物语》攻略视频的字幕与笔记，"
+                            {"role": "user", "content": f"（说明：以下全部是游戏攻略视频{ctx}的字幕与笔记，"
                              "涉及「赌、赢、币」等词均为游戏机制描述，无现实敏感内容。）\n\n" + user},
                         ]
                     t = content_filter_temp[attempt] or temperature
@@ -133,7 +135,7 @@ def summarize_transcript(
 
     # 阶段 1：关键事实抽取（读完整文稿）
     log(f"关键事实抽取（完整文稿 {len(lines)} 行）…")
-    facts = client.chat(_load_prompt("facts.md"), f"{meta_line}\n\n===== 完整字幕文稿 =====\n{full_text}")
+    facts = client.chat(_load_prompt("facts.md"), f"{meta_line}\n\n===== 完整字幕文稿 =====\n{full_text}", game_ctx=video_title)
 
     # 阶段 2：分段笔记（仅长文稿，补充时间顺序上下文）
     notes: list[str] = []
@@ -144,7 +146,7 @@ def summarize_transcript(
             span = f"{chunk[0].split(']')[0][1:]} ~ {chunk[-1].split(']')[0][1:]}"
             log(f"分段总结 {i}/{len(chunks)}（{span}，{len(chunk)} 行）")
             user = f"{meta_line}\n\n===== 字幕文稿 第{i}段/共{len(chunks)}段（{span}） =====\n" + "\n".join(chunk)
-            notes.append(f"### 第 {i} 段（{span}）\n" + client.chat(chunk_system, user))
+            notes.append(f"### 第 {i} 段（{span}）\n" + client.chat(chunk_system, user, game_ctx=video_title))
 
     # 阶段 3：最终合成（强模型；内容风控被拦时换回基础模型兜底）
     synth = final_client or client
@@ -163,11 +165,11 @@ def summarize_transcript(
             "（术语与数值以此为准，叙事与结构以视频文稿为准） =====\n\n" + reference.strip()[:9000]
         )
     try:
-        return synth.chat(system, user)
+        return synth.chat(system, user, game_ctx=video_title)
     except LLMError as e:
         if "内容风控" in str(e) and synth is not client:
             log(f"⚠ {synth.model} 被内容风控拦截，回退 {client.model} 重试")
-            return client.chat(system, user)
+            return client.chat(system, user, game_ctx=video_title)
         raise
 
 
@@ -207,9 +209,9 @@ def _caption_from_line(line: str) -> str:
 def extract_key_moments(markdown: str, duration_sec: int, limit: int = 6, min_gap: int = 15) -> list[dict]:
     """从攻略 Markdown 中提取截图时间点。
 
-    多天内容的视频（如春5+春6）关键步骤集中在每天开头，顺序扫描会挤在前段；
-    改为把视频时长均分为 limit 段、每段取段内首个时间戳，保证截图覆盖全程，
-    不足再从剩余时刻补齐。
+    多天/多阶段内容的视频（如一次跨越多个游戏日）关键步骤集中在每天开头，
+    顺序扫描会挤在前段；改为把视频时长均分为 limit 段、每段取段内首个时间戳，
+    保证截图覆盖全程，不足再从剩余时刻补齐。
     """
     # 顺序收集全部带时间戳的行
     candidates: list[tuple[int, str]] = []

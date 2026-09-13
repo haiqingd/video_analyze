@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .config import OUTPUT_DIR, ROOT_DIR, settings
+from . import bilibili
 from .jobs import STEPS, Job, job_manager
 
 app = FastAPI(title="Video2Guide", docs_url=None, redoc_url=None)
@@ -56,6 +57,52 @@ def extract(req: ExtractRequest) -> dict:
         reference_url=req.reference_url.strip(),
     )
     return {"job_id": job.id}
+
+
+class SeasonRequest(BaseModel):
+    url: str = ""
+    bvid: str = ""
+    access_key: str = ""
+
+
+@app.post("/api/season")
+def season_info(req: SeasonRequest) -> dict:
+    """查询视频所属的 B 站合集及全部视频，并标记哪些已解析过（供前端选集）。"""
+    if not req.access_key or req.access_key != settings.access_key:
+        raise HTTPException(403, "访问密钥不正确，请联系 462574808@qq.com 获取密钥")
+    if not req.url and not req.bvid:
+        raise HTTPException(400, "缺少视频链接")
+    try:
+        if req.bvid:
+            bvid = req.bvid
+        else:
+            bvid, _ = bilibili.parse_url(req.url)
+    except bilibili.BilibiliError as e:
+        raise HTTPException(400, str(e))
+    try:
+        season = bilibili.get_season(bvid, settings.bilibili_sessdata)
+    except bilibili.BilibiliError as e:
+        raise HTTPException(502, f"合集信息获取失败：{e}")
+    if not season:
+        return {"bvid": bvid, "season_id": 0, "season_title": "", "uploader": "", "episodes": []}
+    # 已解析标记：BV → 最新的 done 任务（all() 按 created_at 倒序，setdefault 保留最新）
+    done_by_bv: dict[str, str] = {}
+    for j in job_manager.all():
+        if j.status != "done":
+            continue
+        bv = ((j.result or {}).get("video") or {}).get("bvid")
+        if bv:
+            done_by_bv.setdefault(bv, j.id)
+    for ep in season["episodes"]:
+        ep["parsed"] = ep["bvid"] in done_by_bv
+        ep["job_id"] = done_by_bv.get(ep["bvid"], "")
+    return {
+        "bvid": bvid,
+        "season_id": season["id"],
+        "season_title": season["title"],
+        "uploader": season["uploader"],
+        "episodes": season["episodes"],
+    }
 
 
 @app.get("/api/jobs/{job_id}")
@@ -140,16 +187,25 @@ def add_comment(job_id: str, req: CommentRequest) -> dict:
 
 
 @app.get("/api/jobs")
-def list_jobs() -> dict:    return {
+def list_jobs() -> dict:
+    def _video(j: Job) -> dict:
+        return (j.result or {}).get("video") or {}
+
+    return {
         "jobs": [
-            {"id": j.id, "status": j.status, "created_at": j.created_at,
-             "title": (j.result or {}).get("video", {}).get("title", j.url),
-             "url": j.url,
-             "cover": (j.result or {}).get("video", {}).get("cover", ""),
-             "duration": (j.result or {}).get("video", {}).get("duration", 0),
-             "bvid": (j.result or {}).get("video", {}).get("bvid", ""),
-             "pubdate": (j.result or {}).get("video", {}).get("pubdate", 0)}
-            for j in job_manager.all()[:200]
+            {
+                "id": j.id, "status": j.status, "created_at": j.created_at,
+                "title": _video(j).get("title", j.url),
+                "url": j.url,
+                "cover": _video(j).get("cover", ""),
+                "duration": _video(j).get("duration", 0),
+                "bvid": _video(j).get("bvid", ""),
+                "pubdate": _video(j).get("pubdate", 0),
+                "uploader": _video(j).get("uploader", ""),
+                "season_id": _video(j).get("season_id", 0),
+                "season_title": _video(j).get("season_title", ""),
+            }
+            for j in job_manager.all()[:1000]
         ]
     }
 

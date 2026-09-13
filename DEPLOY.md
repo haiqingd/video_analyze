@@ -66,6 +66,13 @@ docker compose exec video2guide python batch_series.py
 
 注意：`batch_series.py` 顶部的 `REFERENCE_URL`（参考文档链接）与 `CURRENT_GEN_SINCE`（断点时间）按需修改。
 
+**为历史任务回填合集信息**（旧任务的 job.json 缺 `season_id`/`season_title`，历史列表无法按合集分组时执行一次即可，幂等可续跑）：
+
+```bash
+docker compose exec -T video2guide python - < scripts/backfill_season.py
+docker compose restart   # 回填后重启，服务才会重新加载 job.json
+```
+
 ## 五、GPU 加速（可选，强烈建议有显卡的机器开启）
 
 1. 宿主机安装 [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)（Windows 装 NVIDIA 驱动 + Docker Desktop WSL2 后端即可）
@@ -76,6 +83,7 @@ docker compose exec video2guide python batch_series.py
 
 ## 六、功能速查
 
+- **合集**：已生成的攻略在首页按 B 站合集分卡片展示，点卡片进入合集页可按「视频顺序 / 最新发布 / 最新生成」排序；解析合集内的视频时会弹出选集面板，已解析的集数带「已生成」标记，可勾选多集批量生成（合集页的「解析新视频」默认勾选全部未解析集数）
 - **访问密钥**：首次点「生成攻略」会要求输入密钥（即 .env 的 `ACCESS_KEY`），输入正确后浏览器记住；页面提示联系邮箱可在 `app/main.py` 与 `static/index.html` 中修改
 - **分享攻略**：文章页「导出 .v2g」→ 对方在首页「导入」选择该文件，即获得完整文章（含截图、评论、时间戳跳转）
 - **B 站字幕**：在页面「设置」里填 SESSDATA 可直接用 B 站 AI 字幕；不填则自动走本地语音识别（更准但更慢）

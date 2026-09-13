@@ -23,35 +23,35 @@ STEPS = [
 ]
 
 # ---- ASR 辅助：术语表构建 + LLM 同音字纠错 ----
-_ASR_GLOSSARY = (
-    "星露谷物语，脆音音，星露谷，Joja，皮埃尔，威利，克林特，罗宾，刘易斯，"
-    "社区中心，矿井，骷髅洞穴，熔炉，铜锭，晶球，杨桃，防风草，鲶鱼，鲈鱼，"
-    "玻璃纤维杆，鱼饵，稻草人，洒水器，橡子，姜岛，金核桃，星之果实，铱星"
-)
+def _asr_terms(job: "Job", meta: bilibili.VideoMeta | None = None) -> str:
+    """ASR initial_prompt / 纠错术语表：视频与合集标题中的关键词 + 参考文档高频词。
 
-
-def _asr_terms(job: "Job") -> str:
-    """ASR initial_prompt 术语表：固定词表 + 参考文档高频词。"""
+    不再内置任何游戏的固定词表（避免星露谷词条干扰其他游戏的转写）；
+    视频/合集标题天然包含游戏名与专有名词，参考文档则提供该攻略的高频术语。
+    """
     import re as _re
     from collections import Counter
 
-    terms = _ASR_GLOSSARY
+    parts: list[str] = []
+    if meta:
+        for name in (meta.season_title, meta.title, meta.uploader):
+            for w in _re.split(r"[·|｜:：!！?？\-—\s，,、/（）()]+", name):
+                if len(w) >= 2 and w not in parts:
+                    parts.append(w)
     if job.reference_url:
         try:
             ref = reference.fetch_tencent_doc(job.reference_url)
             words = _re.findall(r"[一-鿿]{2,4}", ref)
             cnt = Counter(words)
-            extra = []
             for w, c in cnt.most_common(300):
-                if c < 4 or len(extra) >= 30:
+                if c < 4 or len(parts) >= 60:
                     break
-                if any(w in e or e in w for e in extra):
+                if any(w in e or e in w for e in parts):
                     continue
-                extra.append(w)
-            terms += "，" + "，".join(extra)
+                parts.append(w)
         except reference.ReferenceError:
             pass
-    return terms[:400]
+    return "，".join(parts)[:400]
 
 
 def _llm_correct(client, cues: list, job: "Job") -> list:
@@ -282,7 +282,7 @@ def run_pipeline(job: Job) -> dict[str, Any]:
                 frames.download_audio(job.url, audio_path)
                 job.log(f"音频下载完成（{audio_path.stat().st_size // 1024 // 1024} MB）")
             job.log("语音识别中（GPU 优先，约需几分钟）…")
-            cues = asr.transcribe_audio(audio_path, model_size=settings.asr_model, initial_prompt=_asr_terms(job))
+            cues = asr.transcribe_audio(audio_path, model_size=settings.asr_model, initial_prompt=_asr_terms(job, meta))
             if settings.asr_correct:
                 _asr_client = llm_mod.GLMClient(settings.zhipu_api_key or job.api_key, settings.glm_model, settings.glm_base_url)
                 cues = _llm_correct(_asr_client, cues, job)
@@ -405,6 +405,8 @@ def run_pipeline(job: Job) -> dict[str, Any]:
             "uploader": meta.uploader,
             "duration": meta.duration,
             "pubdate": meta.pubdate,
+            "season_id": meta.season_id,
+            "season_title": meta.season_title,
             "url": f"https://www.bilibili.com/video/{bvid}?p={page}",
             "cover": f"/files/{job.id}/images/cover.jpg" if cover else "",
             "pages": len(meta.pages),

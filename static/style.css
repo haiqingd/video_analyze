@@ -52,7 +52,18 @@ body {
 a { color: var(--blue); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
-main { max-width: 880px; margin: 0 auto; padding: 20px 20px 60px; }
+main {
+  max-width: none; margin: 0; padding: 20px clamp(16px, 2vw, 36px) 60px;
+  display: flex; gap: 20px; align-items: flex-start;
+}
+.content { flex: 1; min-width: 0; }
+#btn-sidebar { display: none; }
+
+/* 超宽屏可读性：正文等阅读区块限宽居中，卡片本身铺满可用宽度 */
+.guide-content, .result-banner, #shots-block, .comments-block,
+.result-actions, .warn-strip, #ep-nav {
+  max-width: 1080px; margin-left: auto; margin-right: auto;
+}
 
 .card {
   background: linear-gradient(180deg, var(--card), var(--bg-soft));
@@ -282,34 +293,52 @@ body { padding-top: 72px; }
 }
 .result-actions { display: flex; gap: 10px; margin-top: 26px; padding-top: 20px; border-top: 1px solid var(--line); }
 
-/* ===== 历史 ===== */
-#history-block { margin-top: 34px; }
-.history-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
-.history-title { font-size: 13.5px; color: var(--text-3); }
-.history-count { font-size: 12.5px; color: var(--pink-2); background: rgba(251,114,153,.1); padding: 2px 10px; border-radius: 999px; }
-.history-tools { display: flex; align-items: center; gap: 10px; margin-left: auto; }
-.history-tools .seg button { padding: 5px 12px; font-size: 12.5px; }
-#history-search {
-  height: 32px; width: 180px; background: var(--bg); border: 1px solid var(--line);
-  border-radius: 9px; color: var(--text); font-size: 13px; padding: 0 12px; outline: none; transition: border-color .2s;
+/* ===== 左侧栏（合集浏览） ===== */
+.sidebar {
+  width: 300px; flex-shrink: 0; position: sticky; top: 66px;
+  max-height: calc(100vh - 86px);
+  background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+  display: flex; flex-direction: column; overflow: hidden;
 }
-#history-search:focus { border-color: var(--pink); }
-#history-list { display: flex; flex-direction: column; gap: 6px; max-height: 420px; overflow-y: auto; padding-right: 4px; }
-#history-list::-webkit-scrollbar { width: 8px; }
-#history-list::-webkit-scrollbar-thumb { background: #262c39; border-radius: 4px; }
-.history-group {
-  font-size: 12px; color: var(--blue); margin: 10px 0 2px; letter-spacing: 2px;
-  display: flex; align-items: center; gap: 8px;
+.sb-pane { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.sb-pane-head { padding: 12px 12px 8px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 7px; }
+.sb-title { font-size: 12.5px; color: var(--text-3); letter-spacing: 1px; }
+.sb-search {
+  height: 32px; background: var(--bg); border: 1px solid var(--line);
+  border-radius: 9px; color: var(--text); font-size: 13px; padding: 0 10px; outline: none; transition: border-color .2s;
 }
-.history-group::after { content: ""; flex: 1; height: 1px; background: var(--line); }
-.history-group:first-child { margin-top: 2px; }
-.history-item {
-  display: flex; align-items: center; justify-content: space-between; gap: 14px;
-  background: var(--bg-soft); border: 1px solid var(--line); border-radius: 10px;
-  padding: 9px 14px; font-size: 13.5px; color: var(--text-2); cursor: pointer; transition: .15s;
+.sb-search:focus { border-color: var(--pink); }
+.sb-back { align-self: flex-start; background: none; border: none; color: var(--pink-2); font-size: 13px; cursor: pointer; padding: 1px 2px; }
+.sb-back:hover { color: var(--pink); }
+.sb-coll-title { font-size: 14.5px; font-weight: 600; word-break: break-all; }
+.sb-coll-meta { font-size: 11.5px; color: var(--text-3); }
+.sb-tools { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+.sb-tools .seg button { padding: 4px 9px; font-size: 11.5px; }
+.sb-tools .btn-sm { height: 30px; font-size: 12.5px; padding: 0 10px; }
+.sb-list { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 5px; }
+.sb-list::-webkit-scrollbar { width: 7px; }
+.sb-list::-webkit-scrollbar-thumb { background: #262c39; border-radius: 4px; }
+.sb-list .history-item { padding: 7px 9px 7px 7px; font-size: 12.5px; }
+.sb-list .history-thumb { width: 56px; height: 35px; }
+
+/* 侧栏：合集条目 */
+.sb-coll-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--bg-soft); cursor: pointer; transition: .15s;
 }
-.history-item:hover { color: var(--text); border-color: var(--line-strong); }
-/* ===== 历史条目（封面 + 两行标题 + 状态点） ===== */
+.sb-coll-item:hover { border-color: var(--line-strong); background: var(--card-2); }
+.sb-coll-cover {
+  width: 64px; height: 40px; border-radius: 6px; overflow: hidden; flex-shrink: 0;
+  background: linear-gradient(135deg, var(--card-2), var(--bg-soft)); border: 1px solid var(--line);
+}
+.sb-coll-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.sb-coll-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.sb-coll-name { font-size: 13.5px; color: var(--text); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sb-coll-sub { font-size: 11.5px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sb-coll-count { font-size: 10.5px; color: var(--text-3); font-family: var(--mono); flex-shrink: 0; }
+
+/* ===== 任务条目（封面 + 两行标题 + 状态点，侧栏复用） ===== */
 .history-item {
   display: flex; align-items: flex-start; gap: 10px;
   background: var(--bg-soft); border: 1px solid var(--line); border-radius: 10px;
@@ -469,46 +498,7 @@ html[data-theme="light"] .modal { box-shadow: 0 20px 60px rgba(15, 23, 42, .18);
 .icon-btn .icon-sun, html[data-theme="light"] .icon-btn .icon-moon { display: none; }
 html[data-theme="light"] .icon-btn .icon-sun { display: block; }
 
-/* ===== 宽屏布局：左侧全高资料库面板 + 中间正文居中（右侧章节目录悬浮） ===== */
-@media (min-width: 1240px) {
-  :root { --side-w: 308px; --main-ml: max(calc(var(--side-w) + 32px), calc((100vw + var(--side-w) - 1040px) / 2)); }
-  main {
-    margin-left: var(--main-ml);
-    margin-right: auto;
-    width: min(1040px, calc(100vw - var(--side-w) - 48px));
-    max-width: none;
-    padding: 20px 0 60px;
-  }
-  #history-block {
-    position: fixed;
-    left: 0;
-    top: 53px;
-    bottom: 0;
-    width: var(--side-w);
-    margin-top: 0;
-    max-height: none;
-    display: flex;
-    flex-direction: column;
-    background: var(--bg-soft);
-    border: none;
-    border-right: 1px solid var(--line);
-    border-radius: 0;
-    padding: 14px 10px 8px 14px;
-    box-shadow: none;
-  }
-  #history-list { flex: 1; max-height: none; overflow-y: auto; gap: 4px; }
-  .history-head { gap: 8px; margin-bottom: 8px; }
-  .history-title { font-size: 13px; }
-  .history-count { font-size: 11.5px; padding: 1px 8px; }
-  .history-tools { margin-left: 0; gap: 8px; width: 100%; }
-  .history-tools .seg { padding: 2px; }
-  .history-tools .seg button { padding: 4px 10px; font-size: 12px; }
-  #history-search { height: 30px; font-size: 12.5px; flex: 1; width: auto; min-width: 0; }
-  .history-item { padding: 6px 8px 6px 6px; gap: 8px; }
-  .history-thumb { width: 56px; height: 35px; border-radius: 5px; margin-top: 2px; }
-  .history-item .h-title { font-size: 12.5px; line-height: 1.4; }
-  .history-group { margin: 8px 0 2px; font-size: 11px; }
-}
+/* ===== 宽屏微调 ===== */
 
 /* ===== 评论 ===== */
 .comments-block { margin-top: 34px; padding-top: 20px; border-top: 1px solid var(--line); }
@@ -555,3 +545,52 @@ html[data-theme="light"] .history-item.active { background: rgba(232, 71, 127, .
 }
 #reference-url::placeholder { color: var(--text-3); }
 #reference-url:focus { border-color: var(--blue); }
+
+/* 攻略页：合集内上一集 / 下一集 */
+.ep-nav { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.ep-pos { font-size: 12px; color: var(--text-3); font-family: var(--mono); }
+.ep-nav .btn-sm { padding: 0 14px; }
+
+/* ===== 合集选集弹窗 ===== */
+.modal-wide { width: min(680px, calc(100vw - 40px)); }
+.season-sub { font-size: 13px; color: var(--text-3); margin-bottom: 10px; }
+.season-tools { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.season-all { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); cursor: pointer; }
+.season-all input { width: 15px; height: 15px; accent-color: var(--pink); }
+.season-selected { font-size: 12.5px; color: var(--pink-2); }
+.season-list { max-height: min(52vh, 460px); overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding-right: 4px; }
+.season-list::-webkit-scrollbar { width: 8px; }
+.season-list::-webkit-scrollbar-thumb { background: #262c39; border-radius: 4px; }
+.season-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--bg-soft); cursor: pointer; transition: .15s;
+  font-size: 13.5px; color: var(--text-2);
+}
+.season-row:hover { border-color: var(--line-strong); color: var(--text); }
+.season-row .season-check { width: 16px; height: 16px; accent-color: var(--pink); flex-shrink: 0; cursor: pointer; }
+.season-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.season-done-badge { width: 16px; text-align: center; color: var(--green); font-size: 13px; flex-shrink: 0; }
+.season-badge {
+  font-size: 11px; padding: 1px 8px; border-radius: 999px; flex-shrink: 0;
+  color: var(--green); background: rgba(74,222,128,.12); border: 1px solid rgba(74,222,128,.3);
+}
+.season-date { font-size: 11.5px; color: var(--text-3); font-family: var(--mono); flex-shrink: 0; }
+
+/* 结果页合集跳转 chip */
+.chip-link { text-decoration: none; cursor: pointer; }
+.chip-link:hover { color: var(--pink-2); border-color: var(--pink); }
+
+/* 移动端：侧栏默认隐藏，顶栏按钮唤出为浮层 */
+@media (max-width: 900px) {
+  #btn-sidebar { display: inline-flex; }
+  .sidebar { display: none; }
+  .sidebar.open {
+    display: flex; position: fixed; left: 0; top: 52px; bottom: 0;
+    width: min(320px, 86vw); max-height: none; z-index: 58;
+    border-radius: 0 14px 14px 0; box-shadow: 14px 0 44px rgba(0,0,0,.45);
+  }
+}
+@media (max-width: 640px) {
+  main { padding: 14px 12px 50px; }
+}
